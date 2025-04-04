@@ -11,6 +11,10 @@ venv/
 # Build artifacts
 build/
 dist/
+data/
+outputs/
+catboost_info/
+
 *.egg-info/
 
 # Jupyter Notebook checkpoints

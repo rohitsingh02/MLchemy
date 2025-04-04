@@ -1,8 +1,12 @@
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
+# from config import PreprocessorConfig
 
 class Preprocessor:
+    # def __init__(self, config: PreprocessorConfig):
     def __init__(self):
+
+        # self.config = config
         self.encoders = {}
 
     def fit_transform(self, df):
