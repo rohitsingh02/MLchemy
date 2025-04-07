@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="mlchemy",  # Package name
-    version="0.1.0",  # Initial version
+    version="0.0.2",  # Initial version
     author="Dracarys",
     author_email="rohit.kaggle@gmail.com",
     description="🔮 MLchemy – The Magic Wand for Machine Learning Predictions 🪄✨",
@@ -13,11 +13,14 @@ setup(
     install_requires=[
         "numpy",
         "pandas",
+        "polars",
+        "catboost",
         "scikit-learn",
         "xgboost",  # For boosting models
         "lightgbm", # Optional but useful
         "shap",     # Feature importance & interpretability
         "optuna",   # Hyperparameter tuning
+        "colorama"
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",

@@ -9,3 +9,4 @@ xgboost
 optuna
 matplotlib
 seaborn
+colorama

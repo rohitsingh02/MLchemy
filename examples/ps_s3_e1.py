@@ -154,7 +154,7 @@ if __name__ == "__main__":
 
 
     trainer = Trainer(config=config, data=df)
-    # trainer.fit(df)
+    trainer.fit(df)
     preds_dict = trainer.predict(df)
     print(preds_dict)
 

@@ -372,7 +372,6 @@ class Trainer:
     def fit(self, 
         train_data: str | pd.DataFrame | pl.DataFrame = "train.csv",
         mode:str="train",
-        save_models: bool = True,
        ):
 
         # self.datetime_features=datetime_features
@@ -387,6 +386,7 @@ class Trainer:
         print(df.head())
         print("*"*100)
         self._train_model(df, config=self.config, models=self.config.models)
+
 
 
     def predict(self, 
