@@ -6,7 +6,7 @@ import pandas as pd
 import polars as pl
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 from sklearn.model_selection import KFold, StratifiedKFold, GroupKFold, RepeatedKFold
-from typing import List, Optional, Tuple, Literal, Union
+from typing import List, Optional, Tuple, Literal, Union, Dict
 from  lightgbm import log_evaluation, early_stopping
 
 from .model import LightGBMPredictor
@@ -32,8 +32,6 @@ class Trainer:
         # Save TrainerConfig
         config_path = os.path.join(self.config.output_dir, "trainer_config.json")
         self._save_config_as_json(self.config, config_path)
-
-
 
 
     def _pickle_dump(self, obj, path):
@@ -109,19 +107,46 @@ class Trainer:
         return df
 
 
-    def _label_encoder(self, df:pd.DataFrame, config:TrainerConfig, mode="train"):
+    # def _label_encoder(self, df:pd.DataFrame, config:TrainerConfig, mode="train"):
+    #     self.logger.info("Using LabelEncoder to encode categorical variables ...")
+    #     for col in config.label_encoder_cols:
+    #         if mode == 'train':
+    #             le = LabelEncoder()
+    #             df[col] = le.fit_transform(df[col].astype(str))  # Convert to str for safety
+    #             self.le_mappings[f'le_{col}.model'] = dict(zip(le.classes_, le.transform(le.classes_)))
+    #             self.logger.info(f"Column {col} LE -> {dict(zip(le.classes_, le.transform(le.classes_)))}")
+    #         else:  # Apply saved mapping
+    #             ### Assuming no new classes in test
+    #             self.logger.info(f"Loading {col} LE -> {self.le_mappings.get(f'le_{col}.model', {})}")
+    #             df[col] = df[col].astype(str).map(self.le_mappings.get(f'le_{col}.model', {})) #.fillna(-1).astype(int)
+    #     return df
+    
+    def _label_encoder(self, df: pd.DataFrame, config: TrainerConfig, mode="train"):
         self.logger.info("Using LabelEncoder to encode categorical variables ...")
-        for col in config.label_encoder_cols:
-            if mode == 'train':
+        # Define the save/load path
+        le_mapping_path = os.path.join(config.output_dir, "le_mappings.model")
+        
+        if mode == "train":
+            for col in config.label_encoder_cols:
                 le = LabelEncoder()
-                df[col] = le.fit_transform(df[col].astype(str))  # Convert to str for safety
+                df[col] = le.fit_transform(df[col].astype(str))  # Ensure type safety
                 self.le_mappings[f'le_{col}.model'] = dict(zip(le.classes_, le.transform(le.classes_)))
-                self.logger.info(f"Column {col} LE -> {dict(zip(le.classes_, le.transform(le.classes_)))}")
-            else:  # Apply saved mapping
-                ### Assuming no new classes in test
-                self.logger.info(f"Loading {col} LE -> {self.le_mappings.get(f'le_{col}.model', {})}")
-                df[col] = df[col].astype(str).map(self.le_mappings.get(f'le_{col}.model', {})) #.fillna(-1).astype(int)
+                self.logger.info(f"Column {col} LE -> {self.le_mappings[f'le_{col}.model']}")
+            # Save mappings to disk
+            self._pickle_dump(self.le_mappings, le_mapping_path)
+            self.logger.info(f"Label encoder mappings saved to: {le_mapping_path}")
+        else:  # mode == "inference" or "valid"
+            # Load mappings from disk
+            self.le_mappings = self._pickle_load(le_mapping_path)
+            self.logger.info(f"Loaded label encoder mappings from: {le_mapping_path}")
+            
+            for col in config.label_encoder_cols:
+                mapping = self.le_mappings.get(f'le_{col}.model', {})
+                self.logger.info(f"Loading {col} LE -> {mapping}")
+                df[col] = df[col].astype(str).map(mapping)  # You could optionally fillna(-1).astype(int)
+
         return df
+
 
 
     def _basic_preprocessing(self, df, config, mode):
@@ -153,7 +178,8 @@ class Trainer:
             df[cat_cols] = df[cat_cols].fillna(config.fillna_cat)
 
         ### handle categorical features encoding [Current Support label|onehot|frequency ]
-        df = self._label_encoder(df, config=config, mode=mode)
+        if len(config.label_encoder_cols) > 0:
+            df = self._label_encoder(df, config=config, mode=mode)
 
         for col in cat_cols:
             if config.cat_encoding == 'onehot':
@@ -256,7 +282,11 @@ class Trainer:
 
     def _train_model(self, df: pd.DataFrame, config:TrainerConfig, models:List[Tuple]):
         self.logger.info("Starting model training...")
-        X = df.drop(config.drop_cols, axis=1)
+        feature_cols = config.num_features + config.label_encoder_cols
+        self.logger.info(f"Training model on {len(feature_cols)} features...")
+        self.logger.info(f"Feature list {list(feature_cols)}")
+
+        X = df[feature_cols].copy() #df.drop(config.drop_cols, axis=1)
         y = df[config.target_col]
         oofs_dict = dict()
 
@@ -265,8 +295,8 @@ class Trainer:
             oof = np.zeros(len(X))
 
             for fold in range(config.num_folds):
-                train_idx = X.loc[X.fold != fold].index
-                val_idx = X.loc[X.fold == fold].index
+                train_idx = df.loc[df.fold != fold].index
+                val_idx = df.loc[df.fold == fold].index
 
                 X_train, y_train = X.loc[train_idx], y.loc[train_idx]
                 X_val, y_val = X.loc[val_idx], y.loc[val_idx]
@@ -304,6 +334,39 @@ class Trainer:
         self.logger.info("Model training completed.")
 
 
+
+    def _infer_model(self, df: pd.DataFrame, config: TrainerConfig, models: List[Tuple]) -> Dict[str, np.ndarray]:
+        self.logger.info("Starting inference using saved models...")
+        feature_cols = config.num_features + config.label_encoder_cols
+        # X = df.drop(config.drop_cols, axis=1)
+        X = df[feature_cols].copy() #df.drop(config.drop_cols, axis=1)
+        self.logger.debug(f"Predicting model on {len(feature_cols)} features...")
+        self.logger.debug(f"Feature list {list(feature_cols)}")
+
+        preds_dict = {}
+
+        for model_idx, (_, model_name) in enumerate(models):
+            self.logger.info(f"Generating predictions with model: {model_name}")
+            preds = np.zeros(len(X))
+
+            for fold in range(config.num_folds):
+                model_path = f"{config.output_dir}/{model_name}_fold{fold}_r0.model"
+                try:
+                    model = self._pickle_load(model_path)
+                    self.logger.info(f"Loaded model: {model_path}")
+                    fold_preds = model.predict(X)
+                    preds += fold_preds / config.num_folds
+                except Exception as e:
+                    self.logger.error(f"Error loading/predicting with {model_name} fold {fold}: {e}")
+                    continue
+
+            preds_dict[model_name] = preds
+            self.logger.info(f"Finished inference for model: {model_name}")
+
+        self.logger.info("Inference completed for all models.")
+        print("pred", preds_dict)
+        return preds_dict
+
                 
 
     def fit(self, 
@@ -324,6 +387,18 @@ class Trainer:
         print(df.head())
         print("*"*100)
         self._train_model(df, config=self.config, models=self.config.models)
+
+
+    def predict(self, 
+            test_data: str | pd.DataFrame | pl.DataFrame = "train.csv",
+            mode:str="test"
+        ):
+        df = self._load_data(train_data=test_data, mode=mode) ### pandas dataframe
+        df = self._basic_preprocessing(df, self.config, mode=mode)
+        preds_dict = self._infer_model(df, config=self.config, models=self.config.models)
+        return preds_dict
+
+
 
 
 
